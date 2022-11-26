@@ -211,7 +211,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    * @throws AssertionError
    */
   public <V> V fail() throws AssertionError {
-    return fail(new AssertionError());
+    return fail(new AssertionError(Thread.currentThread()));
   }
 
   /**
@@ -235,12 +235,17 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
       ae = (AssertionError) reason;
     else {
       ae = new AssertionError();
-      ae.initCause(reason);
+      if (reason != null)
+        ae.initCause(reason);
     }
 
-    failure = ae;
+    setFailure(ae);
     circuit.close();
     throw ae;
+  }
+
+  protected void setFailure (Throwable newFailure) {
+    failure = newFailure;
   }
 
   /**
@@ -249,10 +254,10 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    *
    * @throws Throwable the {@code failure}
    */
-  public void rethrow(Throwable failure) {
-    this.failure = failure;
+  public void rethrow(Throwable newFailure) {
+    setFailure(newFailure);
     circuit.close();
-    sneakyThrow(failure);
+    sneakyThrow(newFailure);
   }
 
   private static void sneakyThrow(Throwable t) {
@@ -283,8 +288,9 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
   }
 
   public <V> V fail (String message, Throwable cause) throws AssertionError {
-    AssertionError ae = new AssertionError(message);
-    ae.initCause(cause);
+    AssertionError ae = new AssertionError(message+ "\tThread: "+Thread.currentThread());
+    if (cause != null)
+      ae.initCause(cause);
     return fail(ae);
   }
 
@@ -297,7 +303,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     if (toStr == null)
       return "null";
     return toStr.toString().replace("\r", "\\r")
-                .replace("\n", "\\n").replace("\t", "\\t");
+        .replace("\n", "\\n").replace("\t", "\\t").trim();
   }
 
 
@@ -412,4 +418,19 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     };
   }
 
+  public <T> T assertStartsWith (String toStringStartsWith, T actual) {
+    if (actual == null)
+      return fail("[assertStartsWith] Expected toString startsWith: "+onelineJava(toStringStartsWith)+
+          "\n\t^^^ but → NULL");
+
+    if (toStringStartsWith.isEmpty())
+      return fail("[assertStartsWith] Expected toString is empty,"+
+          "\n\t^^^ but → "+ actual +" (of: "+actual.getClass()+')');
+
+    if (!actual.toString().startsWith(toStringStartsWith))
+      return fail("[assertStartsWith] Expected toString startsWith: "+onelineJava(toStringStartsWith)+
+          "\n\t^^^ but → "+ actual +" (of: "+actual.getClass()+')');
+
+    return actual;
+  }
 }
