@@ -268,6 +268,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     return "expected:<" + expected + "> but was:<" + actual + ">";
   }
 
+
   public void setUncaughtExceptionHandler () {
     setUncaughtExceptionHandler(Thread.currentThread());
   }
@@ -287,12 +288,12 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     return fail(ae);
   }
 
-  static <T> T elvis (T obj, T ifNull) {
+  private static <T> T elvis (T obj, T ifNull) {
     return obj != null ? obj
         : ifNull;
   }
 
-  String onelineJava (Object toStr) {
+  private String onelineJava (Object toStr) {
     if (toStr == null)
       return "null";
     return toStr.toString().replace("\r", "\\r")

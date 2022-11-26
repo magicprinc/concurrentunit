@@ -15,16 +15,23 @@
  */
 package net.jodah.concurrentunit;
 
+import net.jodah.concurrentunit.internal.ThrowingAction;
+
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
  * Convenience support class, wrapping a {@link Waiter}.
- * 
+ *
  * @author Jonathan Halterman
  */
 public abstract class ConcurrentTestCase {
   private final Waiter waiter = new Waiter();
+
+  public Waiter withWaiter () {
+    return waiter;
+  }
 
   /**
    * @see Waiter#assertEquals(Object, Object)
@@ -64,22 +71,22 @@ public abstract class ConcurrentTestCase {
   /**
    * @see Waiter#fail()
    */
-  public void threadFail() {
-    threadFail(new AssertionError());
+  public <V> V threadFail() {
+    return threadFail(new AssertionError());
   }
 
   /**
    * @see Waiter#fail(String)
    */
-  public void threadFail(String reason) {
-    threadFail(new AssertionError(reason));
+  public <V> V threadFail(String reason) {
+    return threadFail(new AssertionError(reason));
   }
 
   /**
    * @see Waiter#fail(Throwable)
    */
-  public void threadFail(Throwable reason) {
-    waiter.fail(reason);
+  public <V> V threadFail(Throwable reason) {
+    return waiter.fail(reason);
   }
 
   /**
@@ -130,4 +137,40 @@ public abstract class ConcurrentTestCase {
   protected void resume() {
     waiter.resume();
   }
+
+
+  public <V> V threadFail (String message, Throwable cause) throws AssertionError {
+    return waiter.fail(message, cause);
+  }
+
+  public <T extends Throwable> T assertThrows (Class<T> expectedThrowable, ThrowingAction runnable)
+      throws AssertionError, ClassCastException {
+    return waiter.assertThrows(expectedThrowable, runnable);
+  }
+
+  public void run (Runnable code) throws AssertionError {
+    waiter.run(code);
+  }
+
+  public <T> T call (Callable<T> code) throws AssertionError {
+    return waiter.call(code);
+  }
+
+  public void exec (ThrowingAction code) throws AssertionError {
+    waiter.exec(code);
+  }
+
+
+  public Runnable runnable (final Runnable code) {
+    return waiter.runnable(code);
+  }
+
+  public <T> Callable<T> callable (final Callable<? extends T> code) {
+    return waiter.callable(code);
+  }
+
+  public Runnable wrap (final ThrowingAction code) {
+    return waiter.wrap(code);
+  }
+
 }
