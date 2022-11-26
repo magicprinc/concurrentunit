@@ -15,20 +15,22 @@
  */
 package net.jodah.concurrentunit;
 
+import net.jodah.concurrentunit.internal.ReentrantCircuit;
+import net.jodah.concurrentunit.internal.ThrowingAction;
+
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import net.jodah.concurrentunit.internal.ReentrantCircuit;
 
 /**
  * Waits on a test, carrying out assertions, until being resumed.
  *
  * @author Jonathan Halterman
  */
-public class Waiter {
+public class Waiter implements Thread.UncaughtExceptionHandler {
   private static final String TIMEOUT_MESSAGE = "Test timed out while waiting for an expected result, expectedResumes: %d, actualResumes: %d";
-  private AtomicInteger remainingResumes = new AtomicInteger(0);
+  private final AtomicInteger remainingResumes = new AtomicInteger(0);
   private final ReentrantCircuit circuit = new ReentrantCircuit();
   private volatile Throwable failure;
 
@@ -208,8 +210,8 @@ public class Waiter {
    *
    * @throws AssertionError
    */
-  public void fail() {
-    fail(new AssertionError());
+  public <V> V fail() throws AssertionError {
+    return fail(new AssertionError());
   }
 
   /**
@@ -217,8 +219,8 @@ public class Waiter {
    *
    * @throws AssertionError
    */
-  public void fail(String reason) {
-    fail(new AssertionError(reason));
+  public <V> V fail(String reason) throws AssertionError {
+    return fail(new AssertionError(reason));
   }
 
   /**
@@ -227,8 +229,8 @@ public class Waiter {
    *
    * @throws AssertionError wrapping the {@code reason}
    */
-  public void fail(Throwable reason) {
-    AssertionError ae = null;
+  public <V> V fail(Throwable reason) throws AssertionError {
+    AssertionError ae;
     if (reason instanceof AssertionError)
       ae = (AssertionError) reason;
     else {
@@ -262,7 +264,151 @@ public class Waiter {
     throw (T) t;
   }
 
-  private String format(Object expected, Object actual) {
+  private static String format(Object expected, Object actual) {
     return "expected:<" + expected + "> but was:<" + actual + ">";
   }
+
+  public void setUncaughtExceptionHandler () {
+    setUncaughtExceptionHandler(Thread.currentThread());
+  }
+
+  public void setUncaughtExceptionHandler (Thread t) {
+    t.setUncaughtExceptionHandler(this);
+  }
+
+  @Override
+  public void uncaughtException(Thread t, Throwable e){
+    fail("Uncaught Exception! In thread: "+ t, e);
+  }
+
+  public <V> V fail (String message, Throwable cause) throws AssertionError {
+    AssertionError ae = new AssertionError(message);
+    ae.initCause(cause);
+    return fail(ae);
+  }
+
+  static <T> T elvis (T obj, T ifNull) {
+    return obj != null ? obj
+        : ifNull;
+  }
+
+  String onelineJava (Object toStr) {
+    if (toStr == null)
+      return "null";
+    return toStr.toString().replace("\r", "\\r")
+                .replace("\n", "\\n").replace("\t", "\\t");
+  }
+
+
+  /**
+   * <em>Assert</em> that execution of the supplied code throws
+   * an exception of the {@code expectedThrowable} and return the exception.
+   *
+   * <p>If no exception is thrown, or if an exception of a different type is
+   * thrown, this method will fail.
+   *
+   * <p>If you do not want to perform additional checks on the exception instance,
+   * ignore the return value.
+   */
+  public <T extends Throwable> T assertThrows (Class<T> expectedThrowable, ThrowingAction runnable)
+      throws AssertionError, ClassCastException
+  {
+    try {
+      runnable.exec();
+    } catch (Throwable actualThrown) {
+      if (!expectedThrowable.isInstance(actualThrown)) { // 1) thrown 2) expected != actual
+        String expected = elvis(expectedThrowable.getCanonicalName(), expectedThrowable.getName());
+
+        Class<? extends Throwable> actualThrowable = actualThrown.getClass();
+        String actual = elvis(actualThrowable.getCanonicalName(), actualThrowable.getName());
+
+        if (expected.equals(actual)) {
+          // There must be multiple class loaders. Add the identity hash code so the message
+          // doesn't say "expected: java.lang.String<my.package.MyException> ..."
+          expected += "@" + Integer.toHexString(System.identityHashCode(expectedThrowable));
+          actual += "@" + Integer.toHexString(System.identityHashCode(actualThrowable));
+
+          return fail("[assertThrows] Bad thrown exception type! Expected: "+expected+
+              "\n\t^^^ but → "+actual+" = "+onelineJava(actualThrown)+"\n\n@ "+runnable, actualThrown);
+        } else {
+          return fail("[assertThrows] Bad thrown exception type! Expected: "+expected+
+              "\n\t^^^ but → "+onelineJava(actualThrown)+"\n\n@ "+runnable, actualThrown);
+        }
+      }
+      return expectedThrowable.cast(actualThrown);
+    }
+    return fail("[assertThrows] No exception was thrown! Expected: "+
+        elvis(expectedThrowable.getCanonicalName(), expectedThrowable.getName())+"\n\n@ "+runnable);
+  }
+
+  public void run (Runnable code) throws AssertionError {
+    try {
+      code.run();
+    } catch (Throwable e) {
+      fail(e);
+    }
+  }
+
+  public <T> T call (Callable<T> code) throws AssertionError {
+    try {
+      return code.call();
+    } catch (Throwable e) {
+      return fail(e);
+    }
+  }
+
+  public void exec (ThrowingAction code) throws AssertionError {
+    try {
+      code.exec();
+    } catch (Throwable e) {
+      fail(e);
+    }
+  }
+
+
+  public Runnable runnable (final Runnable code) {
+    return new Runnable() {
+      @Override public void run(){
+        try {
+          code.run();
+        } catch (Throwable e) {
+          fail(e);
+        }
+      }
+      @Override public String toString(){
+        return "Waiter.runnable: "+code;
+      }
+    };
+  }
+
+  public <T> Callable<T> callable (final Callable<? extends T> code) {
+    return new Callable<T>() {
+      @Override public T call(){
+        try {
+          return code.call();
+        } catch (Throwable e) {
+          return fail(e);
+        }
+      }
+      @Override public String toString(){
+        return "Waiter.callable: "+code;
+      }
+    };
+  }
+
+  public Runnable wrap (final ThrowingAction code) {
+    return new Runnable() {
+      @Override public void run(){
+        try {
+          code.exec();
+        } catch (Throwable e) {
+          fail(e);
+        }
+      }
+      @Override public String toString(){
+        return "Waiter.asRunnable: "+code;
+      }
+    };
+  }
+
 }
