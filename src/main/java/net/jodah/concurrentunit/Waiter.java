@@ -18,6 +18,7 @@ package net.jodah.concurrentunit;
 import net.jodah.concurrentunit.internal.ReentrantCircuit;
 import net.jodah.concurrentunit.internal.ThrowingAction;
 
+import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -46,12 +47,12 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    *
    * @throws AssertionError when the assertion fails
    */
-  public void assertEquals(Object expected, Object actual) {
+  public boolean assertEquals(Object expected, Object actual) {
     if (expected == null && actual == null)
-      return;
+      return true;
     if (expected != null && expected.equals(actual))
-      return;
-    fail(format(expected, actual));
+      return true;
+    return fail(format(expected, actual, "assertEquals"));
   }
 
   /**
@@ -61,7 +62,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    */
   public void assertFalse(boolean condition) {
     if (condition)
-      fail("expected false");
+      fail("assertFalse: expected false");
   }
 
   /**
@@ -71,7 +72,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    */
   public void assertNotNull(Object object) {
     if (object == null)
-      fail("expected not null");
+      fail("assertNotNull: expected not null");
   }
 
   /**
@@ -81,7 +82,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    */
   public void assertNull(Object object) {
     if (object != null)
-      fail(format("null", object));
+      fail(format(null, object, "assertNull"));
   }
 
   /**
@@ -91,7 +92,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    */
   public void assertTrue(boolean condition) {
     if (!condition)
-      fail("expected true");
+      fail("assertTrue: expected true");
   }
 
   /**
@@ -234,18 +235,18 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     if (reason instanceof AssertionError)
       ae = (AssertionError) reason;
     else {
-      ae = new AssertionError();
+      ae = new AssertionError(Thread.currentThread());
       if (reason != null)
         ae.initCause(reason);
     }
 
     setFailure(ae);
-    circuit.close();
     throw ae;
   }
 
   protected void setFailure (Throwable newFailure) {
     failure = newFailure;
+    circuit.close();
   }
 
   /**
@@ -254,13 +255,13 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
    *
    * @throws Throwable the {@code failure}
    */
-  public void rethrow(Throwable newFailure) {
+  public <V> V rethrow(Throwable newFailure) {
     setFailure(newFailure);
-    circuit.close();
     sneakyThrow(newFailure);
+    throw new IllegalStateException(newFailure);// make javac happy
   }
 
-  private static void sneakyThrow(Throwable t) {
+  static void sneakyThrow(Throwable t) {
     Waiter.<Error>sneakyThrow2(t);
   }
 
@@ -269,8 +270,11 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     throw (T) t;
   }
 
-  private static String format(Object expected, Object actual) {
-    return "expected:<" + expected + "> but was:<" + actual + ">";
+  private static String format(Object expected, Object actual, String where) {
+    String ecn = clsName(expected);
+    String acn = clsName(actual);
+    return where+": expected:<" + line(expected) + ">"+(ecn.isEmpty() ? "" : ' ' +ecn)+
+      ", but was:<" + line(actual) + ">"+(acn.isEmpty() ? "" : ' ' +acn);
   }
 
 
@@ -288,22 +292,51 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
   }
 
   public <V> V fail (String message, Throwable cause) throws AssertionError {
-    AssertionError ae = new AssertionError(message+ "\tThread: "+Thread.currentThread());
+    String ct = Thread.currentThread().toString();
+    AssertionError ae = new AssertionError(message+ (message.contains(ct) ? "" : "\tThread: "+ct));
     if (cause != null)
       ae.initCause(cause);
     return fail(ae);
   }
 
-  private static <T> T elvis (T obj, T ifNull) {
-    return obj != null ? obj
-        : ifNull;
+  private static String clsName (Object o) {
+    if (o == null)
+      return "";
+    if (o instanceof String)
+      return "";
+
+    if (o instanceof Class) {
+      Class<?> klass = (Class<?>) o;
+
+      String cname = klass.getCanonicalName();
+      return (cname != null ? cname
+          : klass.getName())
+          .replace("java.lang.","");
+    }
+    return '('+ clsName(o.getClass()) +')';
   }
 
-  private String onelineJava (Object toStr) {
-    if (toStr == null)
+  static String line(Object o) {
+    if (o == null)
       return "null";
-    return toStr.toString().replace("\r", "\\r")
-        .replace("\n", "\\n").replace("\t", "\\t").trim();
+
+    if (o instanceof Object[]) {
+      return visible(Arrays.deepToString((Object[]) o));
+
+    } else if (o instanceof Throwable) {
+      StringBuilder sb = new StringBuilder(o.toString());
+      Throwable e = (Throwable) o;
+      while (e.getCause()!=null) {
+        e = e.getCause();
+        sb.append(" <= ").append(e);
+      }
+      return visible(sb);
+    }
+    return visible(o);
+  }
+  private static String visible (Object o) {
+    return o.toString().replace("\r", "\\r").replace("\n", "\\n")
+      .replace("\t", "\\t").replace("java.lang.", "").trim();
   }
 
 
@@ -324,10 +357,10 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
       runnable.exec();
     } catch (Throwable actualThrown) {
       if (!expectedThrowable.isInstance(actualThrown)) { // 1) thrown 2) expected != actual
-        String expected = elvis(expectedThrowable.getCanonicalName(), expectedThrowable.getName());
+        String expected = clsName(expectedThrowable);
 
         Class<? extends Throwable> actualThrowable = actualThrown.getClass();
-        String actual = elvis(actualThrowable.getCanonicalName(), actualThrowable.getName());
+        String actual = clsName(actualThrowable);
 
         if (expected.equals(actual)) {
           // There must be multiple class loaders. Add the identity hash code so the message
@@ -336,23 +369,27 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
           actual += "@" + Integer.toHexString(System.identityHashCode(actualThrowable));
 
           return fail("[assertThrows] Bad thrown exception type! Expected: "+expected+
-              "\n\t^^^ but → "+actual+" = "+onelineJava(actualThrown)+"\n\n@ "+runnable, actualThrown);
+              "\n\t^^^ but → "+actual+" = "+line(actualThrown)+
+              "\t# of("+clsName(actualThrowable)+')'+
+              "\n\n@ "+runnable, actualThrown);
         } else {
           return fail("[assertThrows] Bad thrown exception type! Expected: "+expected+
-              "\n\t^^^ but → "+onelineJava(actualThrown)+"\n\n@ "+runnable, actualThrown);
+              "\n\t^^^ but → "+line(actualThrown)+
+              "\t# of("+clsName(actualThrowable)+')'+
+              "\n\n@ "+runnable, actualThrown);
         }
       }
       return expectedThrowable.cast(actualThrown);
     }
     return fail("[assertThrows] No exception was thrown! Expected: "+
-        elvis(expectedThrowable.getCanonicalName(), expectedThrowable.getName())+"\n\n@ "+runnable);
+        clsName(expectedThrowable)+"\n\n@ "+runnable);
   }
 
   public void run (Runnable code) throws AssertionError {
     try {
       code.run();
     } catch (Throwable e) {
-      fail(e);
+      rethrow(e);
     }
   }
 
@@ -360,7 +397,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     try {
       return code.call();
     } catch (Throwable e) {
-      return fail(e);
+      return rethrow(e);
     }
   }
 
@@ -368,7 +405,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     try {
       code.exec();
     } catch (Throwable e) {
-      fail(e);
+      rethrow(e);
     }
   }
 
@@ -379,7 +416,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
         try {
           code.run();
         } catch (Throwable e) {
-          fail(e);
+          rethrow(e);
         }
       }
       @Override public String toString(){
@@ -394,7 +431,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
         try {
           return code.call();
         } catch (Throwable e) {
-          return fail(e);
+          return rethrow(e);
         }
       }
       @Override public String toString(){
@@ -409,28 +446,34 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
         try {
           code.exec();
         } catch (Throwable e) {
-          fail(e);
+          rethrow(e);
         }
       }
       @Override public String toString(){
-        return "Waiter.asRunnable: "+code;
+        return "Waiter.wrap: "+code;
       }
     };
   }
 
   public <T> T assertStartsWith (String toStringStartsWith, T actual) {
     if (actual == null)
-      return fail("[assertStartsWith] Expected toString startsWith: "+onelineJava(toStringStartsWith)+
-          "\n\t^^^ but → NULL");
+      return fail(format(toStringStartsWith, actual, "assertStartsWith"));
 
-    if (toStringStartsWith.isEmpty())
-      return fail("[assertStartsWith] Expected toString is empty,"+
-          "\n\t^^^ but → "+ actual +" (of: "+actual.getClass()+')');
+    if (toStringStartsWith == null || toStringStartsWith.isEmpty())
+      return fail("assertStartsWith: Expected toString is empty! "+
+        "Actual: "+ line(actual)+"\t"+clsName(actual),
+          actual instanceof Throwable ? (Throwable) actual : null);
 
-    if (!actual.toString().startsWith(toStringStartsWith))
-      return fail("[assertStartsWith] Expected toString startsWith: "+onelineJava(toStringStartsWith)+
-          "\n\t^^^ but → "+ actual +" (of: "+actual.getClass()+')');
+    if (!line(actual).startsWith(line(toStringStartsWith)))
+      return fail(format(toStringStartsWith, actual, "assertStartsWith"),
+        actual instanceof Throwable ? (Throwable) actual : null);
 
     return actual;
+  }
+
+  public synchronized void reset () {
+    failure = null;
+    remainingResumes.set(0);
+    circuit.open();
   }
 }
