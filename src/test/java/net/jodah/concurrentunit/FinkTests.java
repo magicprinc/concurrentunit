@@ -1,21 +1,30 @@
 package net.jodah.concurrentunit;
 
+import net.jodah.concurrentunit.internal.CUTools;
+import net.jodah.concurrentunit.internal.CUTools.ThrowingActionImpl;
 import net.jodah.concurrentunit.internal.ThrowingAction;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
+import java.util.LinkedList;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
-import static net.jodah.concurrentunit.Waiter.line;
+import static net.jodah.concurrentunit.internal.CUTools.line;
+import static net.jodah.concurrentunit.internal.CUTools.of;
+import static net.jodah.concurrentunit.internal.CUTools.sneakyThrow;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
+import static org.testng.AssertJUnit.assertFalse;
 
 /**
  * Tests for a.fink addons to {@link Waiter}.
@@ -240,7 +249,7 @@ public class FinkTests {
       public void run() {
         w.run(new Runnable() {
           @Override public void run(){
-            Waiter.sneakyThrow(new IOException());
+            sneakyThrow(new IOException());
           }
         });
       }
@@ -276,7 +285,7 @@ public class FinkTests {
       public void run() {
         w.exec(new ThrowingAction() {
           @Override public void exec(){
-            Waiter.sneakyThrow(new IOException());
+            sneakyThrow(new IOException());
           }
         });
       }
@@ -329,7 +338,7 @@ public class FinkTests {
     Future<?> f = ex.submit(w.runnable(new Runnable()
     {
       @Override public void run(){
-        Waiter.sneakyThrow(new IOException());
+        sneakyThrow(new IOException());
       }
     }));
     try {
@@ -383,7 +392,7 @@ public class FinkTests {
     Future<?> f = ex.submit(w.wrap(new ThrowingAction()
     {
       @Override public void exec(){
-        Waiter.sneakyThrow(new IOException());
+        sneakyThrow(new IOException());
       }
     }));
     try {
@@ -403,4 +412,99 @@ public class FinkTests {
 
   }
 
+
+  @Test
+  public void testUtils(){
+    assertEquals(  CUTools.format(Integer.decode("-41"), new Object[]{1,2,3}, "test"),
+     "test: expected:<-41> (Integer), but was:<[1, 2, 3]> (Object[])");
+    assertEquals(  CUTools.format(Integer.decode("-41"), "-41", "Xyz"),
+        "Xyz: expected:<-41> (Integer), but was:<-41>");
+  }
+
+
+  @Test
+  public void example() throws InterruptedException, TimeoutException, ExecutionException{
+    ExecutorService ex = Executors.newCachedThreadPool();
+    final Waiter w = new Waiter();
+
+    final AtomicLong cnt = new AtomicLong();
+
+    ThrowingActionImpl task1 = of(new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        Thread.sleep(500);
+        cnt.incrementAndGet();
+      }
+    });
+
+    ThrowingActionImpl task2 = of(new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        Thread.sleep(700);
+        throw new IOException("task2 fake failure");
+      }
+    });
+
+    LinkedList<Future<?>> futures = new LinkedList<Future<?>>();
+
+    for (int i=0; i<20; i++) {// 60
+      futures.add(ex.submit(w.callable(task1)));
+      futures.add(ex.submit(w.runnable(task1)));
+      futures.add(ex.submit(w.wrap(task1)));
+    }
+
+    assertEquals(futures.size(), 60);
+    w.await(5000, 60);
+
+    while (!futures.isEmpty()) {
+      Future<?> f = futures.pop();
+      assertTrue(f.isDone());
+      assertFalse(f.isCancelled());
+      assertNull(f.get());
+    }
+    assertEquals(w.getRemainingResumes(), 0);
+
+    // task2 - failures
+    for (int i=0; i<20; i++) {
+      futures.add(ex.submit(w.callable(task2)));
+      futures.add(ex.submit(w.runnable(task2)));
+      futures.add(ex.submit(w.wrap(task2)));
+    }
+    assertEquals(futures.size(), 60);
+
+    IOException e = w.assertThrows(IOException.class, new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        w.await(5000, 60);
+        fail();
+      }
+    });
+    assertEquals(e.toString(), "java.io.IOException: task2 fake failure");
+    assertEquals(w.getRemainingResumes(), 0);
+
+//    for (int i=0; i<60; i++){
+//      IOException e = w.assertThrows(IOException.class, new ThrowingAction() {
+//        @Override public void exec() throws Throwable{
+//          w.await(5000, 1);
+//          fail();
+//        }
+//      });
+//      assertEquals(e.toString(), "java.io.IOException: task2 fake failure");
+//    }
+
+    Thread.sleep(5000);
+    assertEquals(w.getRemainingResumes(), 0);
+
+    while (!futures.isEmpty()) {
+      final Future<?> f = futures.pop();
+      assertTrue(f.isDone());
+      assertFalse(f.isCancelled());
+      ExecutionException ee = w.assertThrows(ExecutionException.class, new ThrowingAction() {
+        @Override public void exec() throws Throwable{
+          assertNull(f.get());
+          fail();
+        }
+      });
+      assertEquals(ee.toString(), "java.util.concurrent.ExecutionException: java.io.IOException: task2 fake failure");
+    }
+
+    assertEquals(ex.shutdownNow().size(), 0);
+  }
 }

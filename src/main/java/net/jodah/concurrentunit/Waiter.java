@@ -18,11 +18,15 @@ package net.jodah.concurrentunit;
 import net.jodah.concurrentunit.internal.ReentrantCircuit;
 import net.jodah.concurrentunit.internal.ThrowingAction;
 
-import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static net.jodah.concurrentunit.internal.CUTools.clsName;
+import static net.jodah.concurrentunit.internal.CUTools.format;
+import static net.jodah.concurrentunit.internal.CUTools.line;
+import static net.jodah.concurrentunit.internal.CUTools.sneakyThrow;
 
 /**
  * Waits on a test, carrying out assertions, until being resumed.
@@ -261,21 +265,6 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     throw new IllegalStateException(newFailure);// make javac happy
   }
 
-  static void sneakyThrow(Throwable t) {
-    Waiter.<Error>sneakyThrow2(t);
-  }
-
-  @SuppressWarnings("unchecked")
-  private static <T extends Throwable> void sneakyThrow2(Throwable t) throws T {
-    throw (T) t;
-  }
-
-  private static String format(Object expected, Object actual, String where) {
-    String ecn = clsName(expected);
-    String acn = clsName(actual);
-    return where+": expected:<" + line(expected) + ">"+(ecn.isEmpty() ? "" : ' ' +ecn)+
-      ", but was:<" + line(actual) + ">"+(acn.isEmpty() ? "" : ' ' +acn);
-  }
 
 
   public void setUncaughtExceptionHandler () {
@@ -299,45 +288,6 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     return fail(ae);
   }
 
-  private static String clsName (Object o) {
-    if (o == null)
-      return "";
-    if (o instanceof String)
-      return "";
-
-    if (o instanceof Class) {
-      Class<?> klass = (Class<?>) o;
-
-      String cname = klass.getCanonicalName();
-      return (cname != null ? cname
-          : klass.getName())
-          .replace("java.lang.","");
-    }
-    return '('+ clsName(o.getClass()) +')';
-  }
-
-  static String line(Object o) {
-    if (o == null)
-      return "null";
-
-    if (o instanceof Object[]) {
-      return visible(Arrays.deepToString((Object[]) o));
-
-    } else if (o instanceof Throwable) {
-      StringBuilder sb = new StringBuilder(o.toString());
-      Throwable e = (Throwable) o;
-      while (e.getCause()!=null) {
-        e = e.getCause();
-        sb.append(" <= ").append(e);
-      }
-      return visible(sb);
-    }
-    return visible(o);
-  }
-  private static String visible (Object o) {
-    return o.toString().replace("\r", "\\r").replace("\n", "\\n")
-      .replace("\t", "\\t").replace("java.lang.", "").trim();
-  }
 
 
   /**
@@ -415,6 +365,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
       @Override public void run(){
         try {
           code.run();
+          resume();
         } catch (Throwable e) {
           rethrow(e);
         }
@@ -429,7 +380,9 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
     return new Callable<T>() {
       @Override public T call(){
         try {
-          return code.call();
+          T result = code.call();
+          resume();
+          return result;
         } catch (Throwable e) {
           return rethrow(e);
         }
@@ -445,6 +398,7 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
       @Override public void run(){
         try {
           code.exec();
+          resume();
         } catch (Throwable e) {
           rethrow(e);
         }
@@ -469,6 +423,11 @@ public class Waiter implements Thread.UncaughtExceptionHandler {
         actual instanceof Throwable ? (Throwable) actual : null);
 
     return actual;
+  }
+
+
+  public int getRemainingResumes() {
+    return remainingResumes.get();
   }
 
   public synchronized void reset () {
