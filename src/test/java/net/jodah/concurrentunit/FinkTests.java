@@ -1,6 +1,5 @@
 package net.jodah.concurrentunit;
 
-import net.jodah.concurrentunit.internal.CUTools;
 import net.jodah.concurrentunit.internal.CUTools.ThrowingActionImpl;
 import net.jodah.concurrentunit.internal.ThrowingAction;
 import org.testng.annotations.Test;
@@ -16,6 +15,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static net.jodah.concurrentunit.internal.CUTools.assertStartsWith;
+import static net.jodah.concurrentunit.internal.CUTools.assertThrows;
+import static net.jodah.concurrentunit.internal.CUTools.eiter;
+import static net.jodah.concurrentunit.internal.CUTools.format;
 import static net.jodah.concurrentunit.internal.CUTools.line;
 import static net.jodah.concurrentunit.internal.CUTools.of;
 import static net.jodah.concurrentunit.internal.CUTools.sneakyThrow;
@@ -51,12 +54,11 @@ public class FinkTests {
       fail();
     } catch (AssertionError e) {
       assertTrue(e.getCause() instanceof ArithmeticException);
-      Throwable ex = w.assertStartsWith("java.lang.ArithmeticException: / by zero",
+      Throwable ex = assertStartsWith("java.lang.ArithmeticException: / by zero",
           e.getCause());
       assertSame(ex, e.getCause());
-      w.assertStartsWith("java.lang.AssertionError: Uncaught Exception! In thread: Thread[Thread-", e);
+      assertStartsWith("java.lang.AssertionError: Uncaught Exception! In thread: Thread[Thread-", e);
     }
-
   }
 
   @Test
@@ -71,7 +73,7 @@ public class FinkTests {
       });
       fail();
     } catch (Throwable e) {
-      w.assertStartsWith(
+      assertStartsWith(
           "java.lang.AssertionError: [assertThrows] No exception was thrown! Expected: NullPointerException\\n\\n@ net.jodah.concurrentunit.FinkTests$",
           e);
     }
@@ -87,7 +89,7 @@ public class FinkTests {
         w.fail();
       }
     });
-    w.assertStartsWith("java.lang.ArithmeticException: / by z", ex);
+    assertStartsWith("java.lang.ArithmeticException: / by z", ex);
     assertEquals("java.lang.ArithmeticException: / by zero", ex.toString());
   }
 
@@ -99,8 +101,8 @@ public class FinkTests {
           w.fail("test", new IOException("fake"));
         }
       });
-    w.assertStartsWith("java.lang.AssertionError: test\tThread: Thread[", e);
-    w.assertStartsWith("java.io.IOException: fake", e.getCause());
+    assertStartsWith("AssertionError: test <= java.io.IOException: fake\\t# Thread: Thread[", e);
+    assertStartsWith("java.io.IOException: fake", e.getCause());
   }
 
   @Test
@@ -115,7 +117,8 @@ public class FinkTests {
       });
       fail();
     } catch (AssertionError e) {
-      w.assertStartsWith(
+      e.printStackTrace();
+      assertStartsWith(
         "java.lang.AssertionError: [assertThrows] Bad thrown exception type! " +
         "Expected: NullPointerException\n\t^^^ but → java.lang.AssertionError: $test wrong type$",
         e);
@@ -125,10 +128,21 @@ public class FinkTests {
 
   @Test
   public void testLine(){
-    assertEquals(line(null), "null");
-    assertEquals(line(new Object[]{new Integer[]{1,2,3}, new String[]{"aa","bb"}}),
+    assertEquals(line(null,null), "null");
+    assertEquals(line(new Object[]{new Integer[]{1,2,3}, new String[]{"aa","bb"}}, null),
         "[[1, 2, 3], [aa, bb]]");
-    assertEquals(line(Integer.decode("42")), "42");
+    assertEquals(line(Integer.decode("42"),""), "42");
+
+    AssertionError e = new AssertionError("facade");// no thread info!
+    e.initCause(new IllegalStateException("W1", new IOException("Kau$e")));
+    assertEquals(e.toString(), "java.lang.AssertionError: facade");
+    assertEquals(format(e, "none", "testLine"),
+        "testLine: expected:<AssertionError: facade <= IllegalStateException: W1 <= java.io.IOException: Kau$e> (AssertionError), but was:<none>");
+
+    assertEquals(line(e,""), "AssertionError: facade <= IllegalStateException: W1 <= java.io.IOException: Kau$e");
+
+    assertStartsWith(
+      "AssertionError: facade <= IllegalStateException: W1 <= java.io.IOException: Kau$e", e);
   }
 
   @Test
@@ -154,6 +168,33 @@ public class FinkTests {
     ae = w.assertThrows(AssertionError.class, new ThrowingAction() {
       @Override public void exec(){
         w.assertStartsWith("x", null);
+      }
+    });
+    assertStartsWith( "assertStartsWith: expected:<x>, but was:<null>\t# Thread: Thread[", ae.getMessage());
+  }
+
+  @Test
+  public void testStartsWith2(){
+    assertStartsWith(" ma", " mama");
+
+    AssertionError ae = assertThrows(AssertionError.class, new ThrowingAction() {
+      @Override public void exec(){
+        assertStartsWith("x", 'y');
+      }
+    });
+    assertStartsWith("AssertionError: assertStartsWith: expected:<x>, but was:<y> (Character)", ae);
+
+    ae = assertThrows(AssertionError.class, new ThrowingAction() {
+      @Override public void exec(){
+        assertStartsWith(null, 'y');
+      }
+    });
+    assertStartsWith("AssertionError: assertStartsWith: Expected toString is empty!" +
+        " Actual: y\t(java.lang.Character)", ae);
+
+    ae = assertThrows(AssertionError.class, new ThrowingAction() {
+      @Override public void exec(){
+        assertStartsWith("x", null);
       }
     });
     assertEquals(ae.getMessage(), "assertStartsWith: expected:<x>, but was:<null>");
@@ -198,14 +239,14 @@ public class FinkTests {
         w.assertNotNull(null);
       }
     });
-    assertEquals(ae.toString(), "java.lang.AssertionError: assertNotNull: expected not null");
+    assertStartsWith( "AssertionError: assertNotNull: expected not null\t# Thread: Thread[", ae);
 
     ae = w.assertThrows(AssertionError.class, new ThrowingAction() {
       @Override public void exec() throws Throwable{
         w.assertFalse(true);
       }
     });
-    assertEquals(ae.toString(), "java.lang.AssertionError: assertFalse: expected false");
+    assertStartsWith( "AssertionError: assertFalse: expected false\t# Thread: Thread[", ae);
 
     assertTrue(w.assertEquals(null, null));
     assertTrue(w.assertEquals("Zv5", "Zv5"));
@@ -215,7 +256,7 @@ public class FinkTests {
         w.assertEquals("ZvExp", "Zv5");
       }
     });
-    assertEquals(ae.toString(), "java.lang.AssertionError: assertEquals: expected:<ZvExp>, but was:<Zv5>");
+    assertStartsWith("AssertionError: assertEquals: expected:<ZvExp>, but was:<Zv5>", ae);
   }
 
 
@@ -307,8 +348,8 @@ public class FinkTests {
       }
     });
     r.run();
-    w.assertEquals(1, cnt.get());
-    w.assertStartsWith("Waiter.runnable: net.jodah.concurrentunit.FinkTests$", r);
+    assertEquals(1, cnt.get());
+    assertStartsWith("Waiter.runnable: net.jodah.concurrentunit.FinkTests$", r);
     // 2
     Callable<Integer> callable = w.callable(new Callable<Integer>() {
       @Override public Integer call(){
@@ -316,8 +357,8 @@ public class FinkTests {
       }
     });
     assertEquals(2, callable.call().intValue());
-    w.assertEquals(2, cnt.get());
-    w.assertStartsWith("Waiter.callable: net.jodah.concurrentunit.FinkTests$", callable);
+    assertEquals(2, cnt.get());
+    assertStartsWith("Waiter.callable: net.jodah.concurrentunit.FinkTests$", callable);
 
     // 3
     r = w.wrap(new ThrowingAction() {
@@ -326,16 +367,16 @@ public class FinkTests {
       }
     });
     r.run();
-    w.assertEquals(3, cnt.get());
-    w.assertStartsWith("Waiter.wrap: net.jodah.concurrentunit.FinkTests$", r);
+    assertEquals(3, cnt.get());
+    assertStartsWith("Waiter.wrap: net.jodah.concurrentunit.FinkTests$", r);
   }
 
   @Test
   public void shouldRethrow1Runnable () throws Throwable {
     final Waiter w = new Waiter();
 
-    ExecutorService ex = Executors.newFixedThreadPool(1);
-    Future<?> f = ex.submit(w.runnable(new Runnable()
+    ExecutorService exec = Executors.newFixedThreadPool(1);
+    Future<?> f = exec.submit(w.runnable(new Runnable()
     {
       @Override public void run(){
         sneakyThrow(new IOException());
@@ -344,17 +385,22 @@ public class FinkTests {
     try {
       w.await();
       fail();
-    } catch (Throwable expected) {
-      assertTrue(expected instanceof IOException);
+    } catch (AssertionError e) {
+      // java.lang.AssertionError: Waiter.runnable: net.jodah.concurrentunit.FinkTests$22@5dd25912	Thread: Thread[pool-2-thread-1,5,main]
+      e.printStackTrace();
+      assertStartsWith( "java.lang.AssertionError: Waiter", e);
+      assertTrue(e.toString().contains("net.jodah.concurrentunit.FinkTests"));
+      assertTrue(e.toString().contains("Thread: Thread[pool"));
     }
     assertTrue(f.isDone());
     try {
       f.get();
       fail();
     } catch (ExecutionException ee) {
-      assertTrue(ee.getCause() instanceof IOException);
+      assertTrue(ee.getCause() instanceof AssertionError);
+      assertTrue(ee.getCause().getCause() instanceof IOException);
     }
-    assertEquals(ex.shutdownNow().size(), 0);
+    assertEquals(exec.shutdownNow().size(), 0);
   }
 
   @Test
@@ -371,15 +417,18 @@ public class FinkTests {
     try {
       w.await();
       fail();
-    } catch (Throwable expected) {
-      assertTrue(expected instanceof IOException);
+    } catch (AssertionError e) {
+      assertTrue(e.getCause() instanceof IOException);
+      assertStartsWith("AssertionError: Waiter.callable: net.jodah.concurrentunit.FinkTests$", e);
+      assertTrue(e.toString().contains("<= java.io.IOException\t# Thread: Thread["));
     }
     assertTrue(f.isDone());
     try {
       f.get();
       fail();
     } catch (ExecutionException ee) {
-      assertTrue(ee.getCause() instanceof IOException);
+      assertTrue(ee.getCause() instanceof AssertionError);
+      assertTrue(ee.getCause().getCause() instanceof IOException);
     }
     assertEquals(ex.shutdownNow().size(), 0);
   }
@@ -389,8 +438,7 @@ public class FinkTests {
     final Waiter w = new Waiter();
 
     ExecutorService ex = Executors.newFixedThreadPool(1);
-    Future<?> f = ex.submit(w.wrap(new ThrowingAction()
-    {
+    Future<?> f = ex.submit(w.wrap(new ThrowingAction(){
       @Override public void exec(){
         sneakyThrow(new IOException());
       }
@@ -398,15 +446,20 @@ public class FinkTests {
     try {
       w.await();
       fail();
-    } catch (Throwable expected) {
-      assertTrue(expected instanceof IOException);
+    } catch (AssertionError e) {
+      System.err.println("catch: "+line(e, null));
+      e.printStackTrace();
+      assertStartsWith("AssertionError: Waiter.wrap: net.jodah.concurrentunit.FinkTests$", e);
+      assertTrue(e.toString().contains("<= java.io.IOException\t# Thread: Thread["));
     }
     assertTrue(f.isDone());
     try {
       f.get();
       fail();
     } catch (ExecutionException ee) {
-      assertTrue(ee.getCause() instanceof IOException);
+      ee.printStackTrace();
+      assertTrue(ee.getCause() instanceof AssertionError);
+      assertTrue(ee.getCause().getCause() instanceof IOException);
     }
     assertEquals(ex.shutdownNow().size(), 0);
 
@@ -415,9 +468,9 @@ public class FinkTests {
 
   @Test
   public void testUtils(){
-    assertEquals(  CUTools.format(Integer.decode("-41"), new Object[]{1,2,3}, "test"),
+    assertEquals(  format(Integer.decode("-41"), new Object[]{1,2,3}, "test"),
      "test: expected:<-41> (Integer), but was:<[1, 2, 3]> (Object[])");
-    assertEquals(  CUTools.format(Integer.decode("-41"), "-41", "Xyz"),
+    assertEquals(  format(Integer.decode("-41"), "-41", "Xyz"),
         "Xyz: expected:<-41> (Integer), but was:<-41>");
   }
 
@@ -425,7 +478,7 @@ public class FinkTests {
   @Test
   public void example() throws InterruptedException, TimeoutException, ExecutionException{
     ExecutorService ex = Executors.newCachedThreadPool();
-    final Waiter w = new Waiter();
+    final Waiter w = new Waiter("example", false, true);// don't fail-fast: wait all
 
     final AtomicLong cnt = new AtomicLong();
 
@@ -470,27 +523,17 @@ public class FinkTests {
     }
     assertEquals(futures.size(), 60);
 
-    IOException e = w.assertThrows(IOException.class, new ThrowingAction() {
+    AssertionError e = w.assertThrows(AssertionError.class, new ThrowingAction() {
       @Override public void exec() throws Throwable{
         w.await(5000, 60);
         fail();
       }
     });
-    assertEquals(e.toString(), "java.io.IOException: task2 fake failure");
+    assertStartsWith( "AssertionError: Waiter.",e);
+    assertTrue(e.toString().contains("Thread: Thread[pool"));
+    assertTrue(e.toString().contains("ThrowingAction: net.jodah.concurrentunit.FinkTests$"));
     assertEquals(w.getRemainingResumes(), 0);
-
-//    for (int i=0; i<60; i++){
-//      IOException e = w.assertThrows(IOException.class, new ThrowingAction() {
-//        @Override public void exec() throws Throwable{
-//          w.await(5000, 1);
-//          fail();
-//        }
-//      });
-//      assertEquals(e.toString(), "java.io.IOException: task2 fake failure");
-//    }
-
-    Thread.sleep(5000);
-    assertEquals(w.getRemainingResumes(), 0);
+    assertEquals(w.getFailureQueue().size(), 0);
 
     while (!futures.isEmpty()) {
       final Future<?> f = futures.pop();
@@ -502,9 +545,82 @@ public class FinkTests {
           fail();
         }
       });
-      assertEquals(ee.toString(), "java.util.concurrent.ExecutionException: java.io.IOException: task2 fake failure");
+      //java.util.concurrent.ExecutionException: java.lang.AssertionError: Waiter.callable: ThrowingAction: net.jodah.concurrentunit.FinkTests$26@17991af1	Thread: Thread[pool-2-thread-57,5,main]
+      assertStartsWith( "java.util.concurrent.ExecutionException: java.lang.AssertionError: Waiter.", ee);
+      assertTrue(ee.toString().contains("ThrowingAction: net.jodah.concurrentunit.FinkTests$"));
+      assertTrue(ee.toString().contains("Thread: Thread[pool-"));
     }
 
     assertEquals(ex.shutdownNow().size(), 0);
+    assertEquals(w.toString(), "[Waiter.example: open] Remaining: 0, Failure: 0");
+    w.resume();
+    try {
+      w.setFailure("test", null, null, null, false);
+      fail();
+    } catch (AssertionError e2) {
+      assertStartsWith("AssertionError: test\t# Thread: Thread[", e2);
+    }
+    assertEquals(w.toString(), "[Waiter.example: closed] Remaining: -2, Failure: 1");
+    w.reset();
+    assertEquals(w.toString(), "[Waiter.example: open] Remaining: 0, Failure: 0");
   }
+
+
+  @Test
+  public void testThrowTwice(){
+    final Waiter w = new Waiter("test", false, true);
+
+    final IOException e1 = (IOException) eiter(new Callable<Object>() {
+      @Override public Object call() throws Exception{
+        return w.rethrow(new IOException("e1"));
+      }
+    });
+    assertStartsWith("java.io.IOException: e1", e1);
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+
+    final IOException e2 = (IOException) eiter(new Callable<Object>() {
+      @Override public Object call() throws Exception{
+        return w.rethrow(e1);
+      }
+    });
+    assertSame(e1, e2);// rethrow ^
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+
+    final AssertionError e3 = eiter(new Callable<Object>() {
+      @Override public Object call() throws Exception{
+        return w.fail(e1);
+      }
+    });
+    assertSame(e1, e2);// rethrow ^
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+    // attempt to put AssertionError into FailureQ 2nd time
+    assertThrows(IOException.class, new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        w.setFailure(null, e1, null, null, true);
+      }
+    });
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+
+    assertThrows(AssertionError.class, new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        w.setFailure(null, e1, null, null, false);
+      }
+    });
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+    // AE
+    assertThrows(AssertionError.class, new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        w.setFailure(null, e3, null, null, true);
+      }
+    });
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+
+    assertThrows(AssertionError.class, new ThrowingAction() {
+      @Override public void exec() throws Throwable{
+        w.setFailure(null, e3, null, null, false);
+      }
+    });
+    assertEquals(w.toString(), "[Waiter.test: closed] Remaining: -1, Failure: 1");
+  }
+
 }

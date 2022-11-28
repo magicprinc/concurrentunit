@@ -72,14 +72,14 @@ public abstract class ConcurrentTestCase {
    * @see Waiter#fail()
    */
   public <V> V threadFail() {
-    return threadFail(new AssertionError());
+    return waiter.fail();
   }
 
   /**
    * @see Waiter#fail(String)
    */
   public <V> V threadFail(String reason) {
-    return threadFail(new AssertionError(reason));
+    return waiter.fail(reason);
   }
 
   /**
